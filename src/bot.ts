@@ -1,6 +1,10 @@
+// Builds the bot; does NOT start it. The webhook entrypoint is src/main.ts
+// (webhookCallback initializes the bot lazily on the first update).
+
 import { Bot, lazySession } from "grammy";
 import { freeStorage } from "@grammyjs/storage-free";
 import { initialSession, type MyContext, type SessionData } from "./context.ts";
+import { sequentialize } from "./sequentialize.ts";
 import { commands } from "./handlers/commands.ts";
 import { callbacks } from "./handlers/callbacks.ts";
 
@@ -10,15 +14,17 @@ if (token === undefined || token === "") {
   Deno.exit(1);
 }
 
-const bot = new Bot<MyContext>(token);
+export const bot = new Bot<MyContext>(token);
+
+// Webhook updates arrive concurrently — serialize per chat BEFORE the session
+// middleware so each read/modify/write cycle is atomic per chat.
+bot.use(sequentialize());
 
 // lazySession (not session): free storage is a remote HTTP service; lazy means
 // ordinary group chatter never touches storage — only handlers that
 // `await ctx.session`. Default session key is the chat id, so one chat ⇒ one
-// session ⇒ at most one game, structurally. Default bot.start() long polling
-// is sequential, so there are no session races out of the box; if ever
-// migrating to @grammyjs/runner or webhooks, add
-// `sequentialize((ctx) => ctx.chatId?.toString())` before this middleware.
+// session ⇒ at most one game, structurally.
+//
 // The free-storage package still types readAllKeys() as Promise<string[]>,
 // which newer grammY StorageAdapter typings reject — expose only the three
 // methods the session plugin actually uses.
@@ -38,11 +44,3 @@ bot.use(callbacks);
 // Free storage can fail transiently (remote HTTP) — log and let the user
 // retry the tap.
 bot.catch((err) => console.error("bot error", err.error));
-
-await bot.api.setMyCommands([
-  { command: "new", description: "Start a game (or repost the current board)" },
-  { command: "help", description: "How to play" },
-]);
-
-console.log("minesweeper bot starting (long polling)…");
-bot.start();

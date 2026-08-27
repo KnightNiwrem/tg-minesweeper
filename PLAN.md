@@ -1,7 +1,8 @@
 # Telegram Minesweeper Bot — Implementation Plan (post-implementation revision)
 
 **Target:** **Deno** + TypeScript · grammY via URL import
-`https://cdn.jsdelivr.net/gh/grammyjs/grammy@1/src/mod.ts` · `jsr:@grammyjs/storage-free`
+`https://cdn.jsdelivr.net/gh/grammyjs/grammy@1/src/mod.ts` · `jsr:@grammyjs/storage-free` ·
+**webhook bot** (`webhookCallback` + `Deno.serve`) deployed on **Deno Deploy v2** — not long polling
 **Feature basis:** Telegram Bot API 10.3 **Rich Messages** — interactive buttons rendered *inside* the message body (including inside table cells), used to build a tappable minesweeper grid in a single message that is edited in place.
 
 > **Revision note:** This plan was originally written for Node.js + `grammy@1.46.0` and has been
@@ -9,6 +10,12 @@
 > reflects what was actually verified against the fetched grammY source and what actually bit
 > during implementation. Sections marked **[verified in practice]** were re-checked against the
 > real fetched code, not just docs.
+>
+> **Owner steering (applies to any future session on this project):**
+> 1. Runtime is Deno; grammY comes from the jsdelivr URL above (these override anything else).
+> 2. The bot runs on **webhooks**, deployed to **Deno Deploy v2** — do not build a long-polling
+>    entrypoint (§0.2, §5.1).
+> 3. Work directly on **`main`** — no feature branches needed; the owner fully owns this repo.
 
 ---
 
@@ -31,8 +38,9 @@ This bot uses **Rich Messages** (Bot API 10.1, June 2026) and **rich-message but
 ```jsonc
 {
   "tasks": {
-    "start": "deno run --allow-import --allow-net --allow-env src/bot.ts",
-    "check": "deno check --allow-import src/bot.ts",
+    "start": "deno run --allow-import --allow-net --allow-env src/main.ts",
+    "webhook": "deno run --allow-import --allow-net --allow-env scripts/webhook.ts",
+    "check": "deno check --allow-import src/main.ts scripts/webhook.ts",
     "test": "deno test --allow-import tests/"
   },
   "imports": {
@@ -65,7 +73,43 @@ Hard-won specifics:
    type-checks test files by default — free extra checking.
 6. Env: `Deno.env.get("BOT_TOKEN")`; exit with a clear error if missing.
 
-### 0.2 Verify-before-coding ritual (do this first, it pays for itself)
+### 0.2 Webhooks + Deno Deploy v2 **[verified in practice]**
+
+The bot is a **webhook** app, not long polling:
+
+- Entry is `src/main.ts`: `Deno.serve` routes `POST /webhook` to
+  `webhookCallback(bot, "std/http", { secretToken })` and answers `GET /` /
+  `GET /healthz` with 200 for health checks. The `"std/http"` adapter takes a
+  `Request` and returns a `Response` — exactly `Deno.serve`'s shape.
+- **`webhookCallback` calls `bot.init()` lazily** on the first update (deduped
+  across concurrent calls) and **enforces the secret token itself** (401 on
+  mismatch, before any update processing). Don't call `bot.start()` anywhere —
+  grammY even patches it to throw after `webhookCallback` is created.
+- **Webhooks deliver updates concurrently** (long polling was sequential), so
+  per-chat serialization is now REQUIRED before the session middleware.
+  ⚠️ `@grammyjs/runner` (home of `sequentialize`) is **not on JSR** — write a
+  ~25-line per-chat promise-queue middleware keyed by `ctx.chatId?.toString()`
+  (same key as the session) instead: chain `next()` onto the previous promise
+  for the chat, clean the map entry when the tail settles (`src/sequentialize.ts`).
+  Known limit: this serializes within one isolate; Deno Deploy can run several.
+  Cross-isolate races need two same-chat taps in the same instant on different
+  isolates — the failure mode is one lost tap; accepted for a game.
+- **Registering the webhook is a one-shot local script**, not deploy-time code
+  (`scripts/webhook.ts`, `deno task webhook <set <url> | info | delete>`):
+  `setWebhook(url, { secret_token, allowed_updates: ["message", "callback_query"] })`.
+  `setMyCommands` moved into the same script — never at module top level, where
+  every cold-started isolate would re-run it.
+- **Deno Deploy v2 setup:** create the app from the GitHub repo in
+  console.deno.com, entrypoint `src/main.ts`, no build step; set `BOT_TOKEN`
+  and `WEBHOOK_SECRET` env vars in the app settings. Remote (jsdelivr/jsr/skypack)
+  imports work on Deploy. Then run `deno task webhook set https://<app-domain>/webhook`
+  once, locally.
+- Local end-to-end testing needs a public HTTPS tunnel (cloudflared/ngrok) —
+  Telegram won't deliver to localhost. Route/health behavior is smoke-testable
+  offline with a dummy token: `GET /` works, but the first `POST /webhook`
+  blocks on `bot.init()`'s `getMe`, so don't mistake that hang for a bug.
+
+### 0.3 Verify-before-coding ritual (do this first, it pays for itself)
 
 ```sh
 echo 'export * from "grammy";' > /tmp/probe.ts && deno cache --allow-import /tmp/probe.ts
@@ -289,8 +333,12 @@ tg-minesweeper/
 ├─ .gitignore            # .env, deno.lock
 ├─ README.md
 ├─ PLAN.md               # this file
+├─ scripts/
+│  └─ webhook.ts         # one-shot local admin: webhook set/info/delete + setMyCommands
 ├─ src/
-│  ├─ bot.ts             # entry: Bot<MyContext>, lazySession + freeStorage, wiring, bot.start()
+│  ├─ main.ts            # webhook entrypoint: Deno.serve + webhookCallback (Deno Deploy)
+│  ├─ bot.ts             # builds Bot<MyContext>: sequentialize, lazySession + freeStorage, wiring — no start()
+│  ├─ sequentialize.ts   # per-chat promise-queue middleware (webhook concurrency)
 │  ├─ context.ts         # MyContext, SessionData, ChatStats, initialSession()
 │  ├─ codec.ts           # callback_data build/parse + Action union + router regexes
 │  ├─ game/
@@ -358,17 +406,23 @@ Rules:
 
 ## 5. Key implementation sketches
 
-### 5.1 Session wiring (`bot.ts`) **[updated — adapter shim required]**
+### 5.1 Bot construction + webhook entrypoint **[updated — webhooks, adapter shim]**
 
 ```ts
+// bot.ts — builds the bot, does NOT start it
 import { Bot, lazySession } from "grammy";
 import { freeStorage } from "@grammyjs/storage-free";
 import { initialSession, type MyContext, type SessionData } from "./context.ts";
+import { sequentialize } from "./sequentialize.ts";
 
 const token = Deno.env.get("BOT_TOKEN");
 if (!token) { console.error("BOT_TOKEN environment variable is required"); Deno.exit(1); }
 
-const bot = new Bot<MyContext>(token);
+export const bot = new Bot<MyContext>(token);
+
+// Webhook updates arrive CONCURRENTLY — serialize per chat BEFORE the session
+// middleware so each read/modify/write cycle is atomic per chat (§0.2).
+bot.use(sequentialize());
 
 // ⚠️ storage-free's readAllKeys() returns Promise<string[]>, but current grammY
 // types StorageAdapter.readAllKeys() as Iterable | AsyncIterable — direct
@@ -385,18 +439,38 @@ bot.use(lazySession({
 }));
 // NOTE: lazySession (not session) — free storage is a remote HTTP service; lazy means
 // ordinary group chatter never touches storage, only handlers that `await ctx.session`.
-// If ever migrating to @grammyjs/runner or webhooks (concurrent updates), add:
-//   bot.use(sequentialize((ctx) => ctx.chatId?.toString()));
-// Default bot.start() long polling is sequential — no session races out of the box.
 
 bot.use(commands);
 bot.use(callbacks);
 bot.catch((err) => console.error("bot error", err.error));
-await bot.api.setMyCommands([
-  { command: "new", description: "Start a game (or repost the current board)" },
-  { command: "help", description: "How to play" },
-]);
-bot.start();
+// setMyCommands lives in scripts/webhook.ts, NOT here — module top level runs
+// on every Deploy isolate cold start.
+```
+
+```ts
+// main.ts — Deno Deploy entrypoint
+import { webhookCallback } from "grammy";
+import { bot } from "./bot.ts";
+
+const handleUpdate = webhookCallback(bot, "std/http", {
+  secretToken: Deno.env.get("WEBHOOK_SECRET") || undefined,
+});
+
+Deno.serve(async (req) => {
+  const url = new URL(req.url);
+  if (req.method === "POST" && url.pathname === "/webhook") {
+    try {
+      return await handleUpdate(req);
+    } catch (err) {
+      console.error("webhook error", err);
+      return new Response("internal error", { status: 500 });  // Telegram will retry
+    }
+  }
+  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/healthz")) {
+    return new Response("ok");
+  }
+  return new Response("not found", { status: 404 });
+});
 ```
 
 ### 5.2 Pure engine (`game/engine.ts`) — no Telegram imports
@@ -554,16 +628,28 @@ callbacks.callbackQuery(ACTION_RE, async (ctx) => {
     cell (one adjacent to a mine) to stay in `"playing"`.
 20. ✅ Keep `freezeOldBoard` in its own module — both `commands.ts` and `callbacks.ts` need
     it, and putting it in either creates a circular import.
+21. ✅ **Webhooks ⇒ concurrent updates ⇒ per-chat serialization is mandatory** before the
+    session middleware; `@grammyjs/runner` isn't on JSR, so hand-roll the queue (§0.2).
+22. ✅ Never call `bot.start()` in a webhook bot (grammY patches it to throw after
+    `webhookCallback`); `bot.init()` and the secret-token 401 are handled inside
+    `webhookCallback` — don't duplicate either.
+23. ✅ No module-top-level Telegram API calls (`setMyCommands` etc.) in deployed code —
+    every Deploy isolate cold start would repeat them. Put them in the one-shot
+    `scripts/webhook.ts`.
 
 ---
 
 ## 7. Build order & acceptance criteria
 
-0. **Verify the API surface from the fetched source first** (§0.2). Ten minutes, prevents days.
+0. **Verify the API surface from the fetched source first** (§0.3). Ten minutes, prevents days.
 1. **Engine + tests** (`Deno.test` + `@std/assert`, seeded mulberry32 RNG): first-click safety across many seeds (safe cell + 8 neighbors never mined, exact mine count) · adjacency consistency · flood fill on fixed layouts (full zero region + numbered border; does not cross numbers; skips flags) · boom marks `exploded` and locks the game · win detection · flag/unflag invariants · resign · out-of-bounds noops. Engine must import nothing from grammy.
 2. **Store + tests:** `hydrate(dehydrate(g))` identity as a property test over random play; all 8 cells-string bit combos; stored JSON size < 1 KiB.
 3. **Renderer + structural tests** (no snapshot infra needed — assert structure directly): mid-game board (live buttons, status-line text, control count) · lost board (💥 on fatal cell, flagged mine keeps 🚩 disabled, geometry stable, single Play-again) · won banner · frozen board has zero live buttons · Hard board: 12×12 ≤ 20 cols, ≥144 callback buttons · every message passes the limit walk (cols ≤ 20, buttons ≤ 8/block, all cells have align/valign, all `callback_data` ≤ 64 bytes).
-4. **Bot wiring, long polling:** manual verification on a real chat (needs a real BOT_TOKEN — cannot be automated from CI) —
+4. **Bot wiring, webhooks:** deploy to Deno Deploy v2 (or tunnel a local `deno task start`),
+   `deno task webhook set`, then manual verification on a real chat (needs a real BOT_TOKEN —
+   cannot be automated from CI) —
+   - `deno task webhook info` shows no `last_error_message` and pending count drains;
+   - two rapid taps in a group land as two moves (sequentialize proof);
    - picker morphs into board; taps dig/flag; mode toggle restyles; win/boom banners render;
    - game over freezes cells as disabled buttons (grid geometry unchanged);
    - `/new` mid-game reposts; taps on the old copy toast "Board moved";
@@ -583,6 +669,8 @@ Everything lives in the `deno.json` import map (§0.1):
 - `jsr:@grammyjs/storage-free@^2.6.0`
 - `jsr:@std/assert@^1.0.0` (tests only)
 
-Env: `BOT_TOKEN` (from @BotFather).
-Run: `deno task start` · Test: `deno task test` · Type-check: `deno task check`.
-All three need network access to cdn.jsdelivr.net, jsr.io, and cdn.skypack.dev (hence `--allow-import`).
+Env: `BOT_TOKEN` (from @BotFather) · `WEBHOOK_SECRET` (any random string; set both locally
+for the admin script and on the Deploy app).
+Serve: `deno task start` · Webhook admin: `deno task webhook <set <url> | info | delete>` ·
+Test: `deno task test` · Type-check: `deno task check`.
+All need network access to cdn.jsdelivr.net, jsr.io, and cdn.skypack.dev (hence `--allow-import`).

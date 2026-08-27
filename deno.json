@@ -1,7 +1,8 @@
 {
   "tasks": {
-    "start": "deno run --allow-import --allow-net --allow-env src/bot.ts",
-    "check": "deno check --allow-import src/bot.ts",
+    "start": "deno run --allow-import --allow-net --allow-env src/main.ts",
+    "webhook": "deno run --allow-import --allow-net --allow-env scripts/webhook.ts",
+    "check": "deno check --allow-import src/main.ts scripts/webhook.ts",
     "test": "deno test --allow-import tests/"
   },
   "imports": {
