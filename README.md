@@ -19,8 +19,9 @@ with grammY imported straight from source:
   dug cell or its 8 neighbors
 - Iterative flood fill on zero cells, win/boom/give-up flows with banners
 - **One game per chat** — state lives in the grammY session (keyed by chat id),
-  persisted in [grammY free storage](https://jsr.io/@grammyjs/storage-free),
-  so games survive bot restarts; in groups the board is co-op
+  persisted in [Deno KV](https://docs.deno.com/deploy/kv/) via
+  [`@grammyjs/storage-denokv`](https://jsr.io/@grammyjs/storage-denokv), so
+  games survive restarts and redeploys; in groups the board is co-op
 - Staleness guards (per-game nonce + board message id) so taps on old or
   reposted boards get a helpful toast instead of corrupting state
 - Frozen boards: finished/replaced boards keep their exact grid geometry with
@@ -52,6 +53,9 @@ count, last error); `deno task webhook delete` unregisters it.
 BOT_TOKEN=123:abc WEBHOOK_SECRET=... deno task start   # serves on :8000
 ```
 
+Locally, Deno KV stores sessions in a sqlite file (managed automatically); on
+Deno Deploy the platform's built-in KV is used — no configuration needed.
+
 Telegram can only deliver to a public HTTPS URL, so for local end-to-end
 testing expose the port with a tunnel (e.g. `cloudflared`, `ngrok`) and
 `deno task webhook set` the tunnel URL. `GET /` and `GET /healthz` answer
@@ -77,7 +81,7 @@ import map if you need reproducible builds.
 ```
 src/
 ├─ main.ts            # webhook entrypoint: Deno.serve + webhookCallback (Deno Deploy)
-├─ bot.ts             # builds the Bot: sequentialize, lazySession + free storage, wiring
+├─ bot.ts             # builds the Bot: sequentialize, lazySession + Deno KV storage, wiring
 ├─ sequentialize.ts   # per-chat update queue (webhooks deliver concurrently)
 ├─ context.ts         # MyContext, SessionData, ChatStats
 ├─ codec.ts           # callback_data build/parse (≤ 64 bytes)

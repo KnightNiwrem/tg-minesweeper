@@ -2,7 +2,7 @@
 // (webhookCallback initializes the bot lazily on the first update).
 
 import { Bot, lazySession } from "grammy";
-import { freeStorage } from "@grammyjs/storage-free";
+import { DenoKVAdapter } from "@grammyjs/storage-denokv";
 import { initialSession, type MyContext, type SessionData } from "./context.ts";
 import { sequentialize } from "./sequentialize.ts";
 import { commands } from "./handlers/commands.ts";
@@ -20,27 +20,23 @@ export const bot = new Bot<MyContext>(token);
 // middleware so each read/modify/write cycle is atomic per chat.
 bot.use(sequentialize());
 
-// lazySession (not session): free storage is a remote HTTP service; lazy means
-// ordinary group chatter never touches storage — only handlers that
-// `await ctx.session`. Default session key is the chat id, so one chat ⇒ one
-// session ⇒ at most one game, structurally.
+// lazySession (not session): storage is external I/O; lazy means ordinary
+// group chatter never touches it — only handlers that `await ctx.session`.
+// Default session key is the chat id, so one chat ⇒ one session ⇒ at most one
+// game, structurally.
 //
-// The free-storage package still types readAllKeys() as Promise<string[]>,
-// which newer grammY StorageAdapter typings reject — expose only the three
-// methods the session plugin actually uses.
-const free = freeStorage<SessionData>(bot.token);
+// Sessions live in Deno KV (built into Deno Deploy; a sqlite file locally,
+// hence the kv unstable flag + read/write permissions in the tasks). This
+// replaced @grammyjs/storage-free: its hosted backend ran on Classic Deno
+// Deploy, which was shut down.
+const kv = await Deno.openKv();
 bot.use(lazySession({
   initial: initialSession,
-  storage: {
-    read: (key) => free.read(key),
-    write: (key, value) => free.write(key, value),
-    delete: (key) => free.delete(key),
-  },
+  storage: new DenoKVAdapter<SessionData>(kv),
 }));
 
 bot.use(commands);
 bot.use(callbacks);
 
-// Free storage can fail transiently (remote HTTP) — log and let the user
-// retry the tap.
+// Storage/API hiccups: log and let the user retry the tap.
 bot.catch((err) => console.error("bot error", err.error));

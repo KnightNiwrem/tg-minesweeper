@@ -1,8 +1,9 @@
 # Telegram Minesweeper Bot — Implementation Plan (post-implementation revision)
 
 **Target:** **Deno** + TypeScript · grammY via URL import
-`https://cdn.jsdelivr.net/gh/grammyjs/grammy@1/src/mod.ts` · `jsr:@grammyjs/storage-free` ·
-**webhook bot** (`webhookCallback` + `Deno.serve`) deployed on **Deno Deploy v2** — not long polling
+`https://cdn.jsdelivr.net/gh/grammyjs/grammy@1/src/mod.ts` · sessions in **Deno KV**
+(`jsr:@grammyjs/storage-denokv`) · **webhook bot** (`webhookCallback` + `Deno.serve`)
+deployed on **Deno Deploy v2** — not long polling
 **Feature basis:** Telegram Bot API 10.3 **Rich Messages** — interactive buttons rendered *inside* the message body (including inside table cells), used to build a tappable minesweeper grid in a single message that is edited in place.
 
 > **Revision note:** This plan was originally written for Node.js + `grammy@1.46.0` and has been
@@ -16,6 +17,11 @@
 > 2. The bot runs on **webhooks**, deployed to **Deno Deploy v2** — do not build a long-polling
 >    entrypoint (§0.2, §5.1).
 > 3. Work directly on **`main`** — no feature branches needed; the owner fully owns this repo.
+> 4. Sessions live in **Deno KV** via the official `jsr:@grammyjs/storage-denokv` adapter.
+>    Do NOT use `@grammyjs/storage-free`: its hosted backend ran on Classic Deno Deploy,
+>    which has been shut down — in production every session access died with
+>    `SyntaxError: Unexpected non-whitespace character after JSON at position 3`
+>    (the adapter JSON.parses what is now an error page from `/api/login`).
 
 ---
 
@@ -38,15 +44,16 @@ This bot uses **Rich Messages** (Bot API 10.1, June 2026) and **rich-message but
 ```jsonc
 {
   "tasks": {
-    "start": "deno run --allow-import --allow-net --allow-env src/main.ts",
-    "webhook": "deno run --allow-import --allow-net --allow-env scripts/webhook.ts",
+    "start": "deno run --allow-import --allow-net --allow-env --allow-read --allow-write src/main.ts",
+    "webhook": "deno run --allow-import --allow-net --allow-env --allow-read --allow-write scripts/webhook.ts",
     "check": "deno check --allow-import src/main.ts scripts/webhook.ts",
     "test": "deno test --allow-import tests/"
   },
+  "unstable": ["kv"],
   "imports": {
     "grammy": "https://cdn.jsdelivr.net/gh/grammyjs/grammy@1/src/mod.ts",
     "grammy/types": "https://cdn.jsdelivr.net/gh/grammyjs/grammy@1/src/types.ts",
-    "@grammyjs/storage-free": "jsr:@grammyjs/storage-free@^2.6.0",
+    "@grammyjs/storage-denokv": "jsr:@grammyjs/storage-denokv@^2.6.0",
     "@std/assert": "jsr:@std/assert@^1.0.0"
   },
   "lock": false,
@@ -64,11 +71,15 @@ Hard-won specifics:
 3. **`"lock": false`** because `@1` is a moving tag: a committed lockfile hard-fails with an
    integrity error the moment upstream publishes a new 1.x. Pin an exact tag instead if you
    want reproducible builds — then re-enable the lock.
-4. **Storage comes from JSR** (`jsr:@grammyjs/storage-free`), not npm and not deno.land/x.
-   In the implementation environment, deno.land and esm.sh were unreachable (proxy), and the
-   raw GitHub source of the storages monorepo uses Node-style `./adapter.js` specifiers Deno
-   can't resolve. JSR worked everywhere jsdelivr did. Check
-   `https://jsr.io/@grammyjs/storage-free/meta.json` to confirm the latest version.
+4. **Storage: Deno KV via `jsr:@grammyjs/storage-denokv`** (owner steering; see the note at
+   the top — `storage-free`'s backend is dead). Grab grammY storage adapters from **JSR**,
+   not npm and not deno.land/x: in the implementation environment, deno.land and esm.sh were
+   unreachable (proxy), and the raw GitHub source of the storages monorepo uses Node-style
+   `./adapter.js` specifiers Deno can't resolve. The denokv adapter's `deps.ts` type-imports
+   `npm:grammy@1`, so `deno check` also needs registry.npmjs.org reachable.
+   KV specifics: `"unstable": ["kv"]` in deno.json enables `Deno.openKv()` for run/check/test;
+   locally KV is a sqlite file (needs `--allow-read --allow-write`), on Deno Deploy it is the
+   platform's built-in KV with zero configuration.
 5. **Tests: `Deno.test` + `jsr:@std/assert`** (no vitest, no npm dev-deps at all). `deno test`
    type-checks test files by default — free extra checking.
 6. Env: `Deno.env.get("BOT_TOKEN")`; exit with a clear error if missing.
@@ -222,9 +233,8 @@ interface InputRichBlockExpandableBlockQuotation { type: "expandable_blockquote"
 | Table columns | **20** | 12 (Hard) ✓ |
 | Buttons per `buttons` block | **8** | 3 ✓ |
 | `callback_data` | **64 bytes** | 15 (`ms:xxxx:c:11:11`) ✓ |
-| Free storage: per session key | **16 KiB** | < 1 KiB ✓ (measured: a Hard game stores well under 1 KiB) |
-| Free storage: session key length | 64 chars | ~14 (chat id) ✓ |
-| Free storage: sessions per bot | 50,000 | = 50k chats |
+| Deno KV: per value | **64 KiB** | < 1 KiB ✓ (measured: a Hard game stores well under 1 KiB) |
+| Deno KV: key size | 2 KiB | `["sessions", <chat id>]` ✓ |
 
 Known unknown: no documented cap on *total* in-cell buttons per message. Production chess bots ship 64+; Hard mode uses 144. If a server cap surfaces during testing, shrink Hard to 10×12 — the architecture doesn't change.
 
@@ -275,7 +285,7 @@ replaces blocks 4–5 with a paragraph: "⤵️ This board moved — use the lat
 
 ### 2.4 One game per chat (core invariant)
 
-State lives in the grammY **session** (default key = chat id) as `game: StoredGame | null`. One chat ⇒ one session ⇒ at most one game. Persisted in **free storage**, so games survive bot restarts.
+State lives in the grammY **session** (default key = chat id) as `game: StoredGame | null`. One chat ⇒ one session ⇒ at most one game. Persisted in **Deno KV**, so games survive restarts and redeploys.
 
 Lifecycle:
 
@@ -337,7 +347,7 @@ tg-minesweeper/
 │  └─ webhook.ts         # one-shot local admin: webhook set/info/delete + setMyCommands
 ├─ src/
 │  ├─ main.ts            # webhook entrypoint: Deno.serve + webhookCallback (Deno Deploy)
-│  ├─ bot.ts             # builds Bot<MyContext>: sequentialize, lazySession + freeStorage, wiring — no start()
+│  ├─ bot.ts             # builds Bot<MyContext>: sequentialize, lazySession + Deno KV storage, wiring — no start()
 │  ├─ sequentialize.ts   # per-chat promise-queue middleware (webhook concurrency)
 │  ├─ context.ts         # MyContext, SessionData, ChatStats, initialSession()
 │  ├─ codec.ts           # callback_data build/parse + Action union + router regexes
@@ -380,7 +390,7 @@ export interface GameState {
   minesPlaced: boolean; flags: number; revealedCount: number; startedAt?: number;
 }
 
-// Persisted model — compact, < 1 KiB (16 KiB budget)
+// Persisted model — compact, < 1 KiB (Deno KV's per-value cap is 64 KiB)
 export interface StoredGame {
   nonce: string; messageId: number; startedBy: number; startedByName: string;
   difficulty: Difficulty; rows: number; cols: number; mines: number;
@@ -411,7 +421,7 @@ Rules:
 ```ts
 // bot.ts — builds the bot, does NOT start it
 import { Bot, lazySession } from "grammy";
-import { freeStorage } from "@grammyjs/storage-free";
+import { DenoKVAdapter } from "@grammyjs/storage-denokv";
 import { initialSession, type MyContext, type SessionData } from "./context.ts";
 import { sequentialize } from "./sequentialize.ts";
 
@@ -424,21 +434,14 @@ export const bot = new Bot<MyContext>(token);
 // middleware so each read/modify/write cycle is atomic per chat (§0.2).
 bot.use(sequentialize());
 
-// ⚠️ storage-free's readAllKeys() returns Promise<string[]>, but current grammY
-// types StorageAdapter.readAllKeys() as Iterable | AsyncIterable — direct
-// assignment is a type error. Expose only the three methods the session
-// plugin actually uses:
-const free = freeStorage<SessionData>(bot.token);
+// Sessions in Deno KV (top-level await is fine in a module):
+const kv = await Deno.openKv();
 bot.use(lazySession({
   initial: initialSession,
-  storage: {
-    read: (key) => free.read(key),
-    write: (key, value) => free.write(key, value),
-    delete: (key) => free.delete(key),
-  },
+  storage: new DenoKVAdapter<SessionData>(kv),
 }));
-// NOTE: lazySession (not session) — free storage is a remote HTTP service; lazy means
-// ordinary group chatter never touches storage, only handlers that `await ctx.session`.
+// NOTE: lazySession (not session) — storage is external I/O; lazy means ordinary
+// group chatter never touches storage, only handlers that `await ctx.session`.
 
 bot.use(commands);
 bot.use(callbacks);
@@ -615,10 +618,12 @@ callbacks.callbackQuery(ACTION_RE, async (ctx) => {
 10. `sendRichMessageDraft` is irrelevant here (ephemeral 30-s AI-streaming preview, private chats only) — do not use.
 11. Do not store per-user data in the session — it is per-chat by design.
 12. ✅ `hydrate(dehydrate(g))` must be identity (modulo recomputed fields) — enforce with a property test over random play sequences.
-13. Free storage can fail transiently (remote HTTP) — `bot.catch` logs, user retries the tap. The adapter implements grammY's standard `StorageAdapter` shape (modulo pitfall 15), so swapping to Redis/KV later is localized to `bot.ts`.
+13. Storage/API calls can fail transiently — `bot.catch` logs, user retries the tap. The adapter implements grammY's standard `StorageAdapter` shape, so swapping stores later is localized to `bot.ts`.
 14. ✅ **`ctx.match` needs a cast** to `RegExpMatchArray` under strict TS (§1.3).
-15. ✅ **storage-free ↔ StorageAdapter type mismatch** on `readAllKeys` — wrap with a
-    three-method object (§5.1). Do not `as any` the whole adapter.
+15. ✅ **`@grammyjs/storage-free` is DEAD** — its backend ran on Classic Deno Deploy (shut
+    down); every session access throws `SyntaxError: Unexpected non-whitespace character
+    after JSON` from its `/api/login`. Use `jsr:@grammyjs/storage-denokv` + `Deno.openKv()`
+    instead (§0.1). This bit in production after working "on paper".
 16. ✅ **Discriminated unions need one literal `kind` per member** (§2.6) — a union-typed
     `kind` inside one member silently kills narrowing.
 17. ✅ **`mod.ts` does not export the API types** — map `grammy/types` to `src/types.ts`.
@@ -666,7 +671,7 @@ Everything lives in the `deno.json` import map (§0.1):
 
 - `grammy` → `https://cdn.jsdelivr.net/gh/grammyjs/grammy@1/src/mod.ts` (project requirement; `@1` = latest 1.x, resolved to 1.45.1 at build time)
 - `grammy/types` → same repo, `src/types.ts`
-- `jsr:@grammyjs/storage-free@^2.6.0`
+- `jsr:@grammyjs/storage-denokv@^2.6.0` (sessions in Deno KV; NOT storage-free — dead backend)
 - `jsr:@std/assert@^1.0.0` (tests only)
 
 Env: `BOT_TOKEN` (from @BotFather) · `WEBHOOK_SECRET` (any random string; set both locally
