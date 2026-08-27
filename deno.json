@@ -1,0 +1,18 @@
+{
+  "tasks": {
+    "start": "deno run --allow-import --allow-net --allow-env src/bot.ts",
+    "check": "deno check --allow-import src/bot.ts",
+    "test": "deno test --allow-import tests/"
+  },
+  "imports": {
+    "grammy": "https://cdn.jsdelivr.net/gh/grammyjs/grammy@1/src/mod.ts",
+    "grammy/types": "https://cdn.jsdelivr.net/gh/grammyjs/grammy@1/src/types.ts",
+    "@grammyjs/storage-free": "jsr:@grammyjs/storage-free@^2.6.0",
+    "@std/assert": "jsr:@std/assert@^1.0.0"
+  },
+  "lock": false,
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": false
+  }
+}
