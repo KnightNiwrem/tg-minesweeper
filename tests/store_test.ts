@@ -18,8 +18,16 @@ Deno.test("cells codec: all 8 mine/revealed/flagged combos round-trip", () => {
   const back = hydrate(stored);
   for (let i = 0; i < 8; i++) {
     assertEquals(back.board[0][i].mine, (i & 1) !== 0, `mine bit, combo ${i}`);
-    assertEquals(back.board[0][i].revealed, (i & 2) !== 0, `revealed bit, combo ${i}`);
-    assertEquals(back.board[0][i].flagged, (i & 4) !== 0, `flagged bit, combo ${i}`);
+    assertEquals(
+      back.board[0][i].revealed,
+      (i & 2) !== 0,
+      `revealed bit, combo ${i}`,
+    );
+    assertEquals(
+      back.board[0][i].flagged,
+      (i & 4) !== 0,
+      `flagged bit, combo ${i}`,
+    );
   }
 });
 

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    name: ${{ matrix.check.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check:
+          - name: fmt
+            command: deno fmt --check
+          - name: lint
+            command: deno lint
+          - name: check
+            command: deno task check
+          - name: test
+            command: deno task test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Run ${{ matrix.check.name }}
+        run: ${{ matrix.check.command }}

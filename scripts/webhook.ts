@@ -22,7 +22,10 @@ switch (cmd) {
       allowed_updates: ["message", "callback_query"],
     });
     await bot.api.setMyCommands([
-      { command: "new", description: "Start a game (or repost the current board)" },
+      {
+        command: "new",
+        description: "Start a game (or repost the current board)",
+      },
       { command: "help", description: "How to play" },
     ]);
     console.log("webhook set to", url);
