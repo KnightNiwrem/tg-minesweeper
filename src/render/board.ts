@@ -12,7 +12,7 @@ import { cbCell, cbMode, cbNew, cbQuit, cbRepost } from "../codec.ts";
 import { isOver } from "../game/engine.ts";
 import { DIFFICULTIES, type GameState } from "../game/types.ts";
 import type { ChatStats } from "../context.ts";
-import { banner, buttonsRow, cbBtn, disabledBtn, para } from "./rich.ts";
+import { banner, buttonsRow, cbBtn, para } from "./rich.ts";
 
 export interface RenderOptions {
   /**
@@ -38,12 +38,19 @@ function statusLine(g: GameState, now: number): RichText {
     ` · game by ${g.startedByName}`;
 }
 
-function cellContent(g: GameState, r: number, c: number, frozen: boolean): RichText {
+function cellContent(
+  g: GameState,
+  r: number,
+  c: number,
+  frozen: boolean,
+): RichText {
   const cell = g.board[r][c];
   const over = isOver(g);
   if (over && cell.mine && !cell.flagged) return cell.exploded ? "💥" : "💣";
   if (cell.revealed) {
-    return cell.adjacent === 0 ? " " : { type: "bold", text: String(cell.adjacent) };
+    return cell.adjacent === 0
+      ? " "
+      : { type: "bold", text: String(cell.adjacent) };
   }
   // Covered or flagged: a tappable button while live, a greyed-out disabled
   // button once the game is over/frozen (keeps the grid geometry stable).
@@ -96,7 +103,9 @@ function helpAndStats(stats: ChatStats): RichText {
   ];
   const bests = (Object.keys(DIFFICULTIES) as (keyof typeof DIFFICULTIES)[])
     .filter((d) => stats.bestMs[d] !== undefined)
-    .map((d) => `${DIFFICULTIES[d].label}: ${formatDuration(stats.bestMs[d]!)}`);
+    .map((d) =>
+      `${DIFFICULTIES[d].label}: ${formatDuration(stats.bestMs[d]!)}`
+    );
   if (bests.length > 0) lines.push(`Best times — ${bests.join(" · ")}`);
   return lines.join("\n");
 }

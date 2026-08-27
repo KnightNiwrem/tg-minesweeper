@@ -1,14 +1,14 @@
 # Telegram Minesweeper Bot
 
-Minesweeper played entirely inside a single Telegram message, built on
-**Bot API 10.3 Rich Messages**: the board is a rich-message `table` whose
-cells contain tappable in-body buttons, edited in place on every move.
-There is no `reply_markup` / inline keyboard anywhere — the buttons live in
-the message body itself.
+Minesweeper played entirely inside a single Telegram message, built on **Bot API
+10.3 Rich Messages**: the board is a rich-message `table` whose cells contain
+tappable in-body buttons, edited in place on every move. There is no
+`reply_markup` / inline keyboard anywhere — the buttons live in the message body
+itself.
 
-Runs on **Deno** as a **webhook bot** (designed for [Deno Deploy](https://deno.com/deploy) v2),
-with grammY imported straight from source:
-`https://cdn.jsdelivr.net/gh/grammyjs/grammy@1/src/mod.ts`.
+Runs on **Deno** as a **webhook bot** (designed for
+[Deno Deploy](https://deno.com/deploy) v2), with grammY imported straight from
+source: `https://cdn.jsdelivr.net/gh/grammyjs/grammy@1/src/mod.ts`.
 
 ## Features
 
@@ -30,7 +30,8 @@ with grammY imported straight from source:
 ## Setup
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
-2. Pick a webhook secret (any random string) so only Telegram can hit your endpoint.
+2. Pick a webhook secret (any random string) so only Telegram can hit your
+   endpoint.
 
 ### Deploy on Deno Deploy v2
 
@@ -56,8 +57,8 @@ BOT_TOKEN=123:abc WEBHOOK_SECRET=... deno task start   # serves on :8000
 Locally, Deno KV stores sessions in a sqlite file (managed automatically); on
 Deno Deploy the platform's built-in KV is used — no configuration needed.
 
-Telegram can only deliver to a public HTTPS URL, so for local end-to-end
-testing expose the port with a tunnel (e.g. `cloudflared`, `ngrok`) and
+Telegram can only deliver to a public HTTPS URL, so for local end-to-end testing
+expose the port with a tunnel (e.g. `cloudflared`, `ngrok`) and
 `deno task webhook set` the tunnel URL. `GET /` and `GET /healthz` answer
 `200 ok` for health checks.
 

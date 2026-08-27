@@ -1,11 +1,7 @@
 // Tiny typed builders for rich-message blocks. Buttons here live in the
 // message BODY (rich message blocks) — this bot never uses reply_markup.
 
-import type {
-  InputRichBlock,
-  RichMessageButton,
-  RichText,
-} from "grammy/types";
+import type { InputRichBlock, RichMessageButton, RichText } from "grammy/types";
 
 export function para(text: RichText): InputRichBlock {
   return { type: "paragraph", text };

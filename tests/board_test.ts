@@ -7,10 +7,7 @@ import type {
 } from "grammy/types";
 import { createGame, dig, resign, toggleFlag } from "../src/game/engine.ts";
 import type { ChatStats } from "../src/context.ts";
-import {
-  renderDifficultyPicker,
-  renderGame,
-} from "../src/render/board.ts";
+import { renderDifficultyPicker, renderGame } from "../src/render/board.ts";
 import { seededRng, setMines } from "./helpers.ts";
 
 const stats: ChatStats = { wins: 3, losses: 1, bestMs: { easy: 83_000 } };
@@ -33,7 +30,9 @@ function collectButtons(msg: InputRichMessage): RichMessageButton[] {
   for (const block of msg.blocks ?? []) {
     if (block.type === "buttons") found.push(...block.buttons);
     else if (block.type === "table") {
-      for (const row of block.cells) for (const cell of row) walkText(cell.text);
+      for (const row of block.cells) {
+        for (const cell of row) walkText(cell.text);
+      }
     } else if ("text" in block) walkText(block.text as RichText);
   }
   return found;
@@ -53,7 +52,10 @@ function assertLimits(msg: InputRichMessage) {
       }
     }
     if (block.type === "buttons") {
-      assert(block.buttons.length >= 1 && block.buttons.length <= 8, "buttons cap");
+      assert(
+        block.buttons.length >= 1 && block.buttons.length <= 8,
+        "buttons cap",
+      );
     }
   }
   for (const b of collectButtons(msg)) {
@@ -116,7 +118,10 @@ Deno.test("lost board: mines shown, remaining cells disabled, single control", (
   assertEquals(table.cells[2][2].text, "💥");
   // Flagged mine keeps its flag (as a disabled button)
   const flagged = table.cells[5][5].text;
-  assert(typeof flagged === "object" && !Array.isArray(flagged) && flagged.type === "button");
+  assert(
+    typeof flagged === "object" && !Array.isArray(flagged) &&
+      flagged.type === "button",
+  );
   assert("disabled" in flagged.button);
   // Every remaining covered cell is a disabled button — geometry stays stable
   for (const b of collectButtons(msg)) {

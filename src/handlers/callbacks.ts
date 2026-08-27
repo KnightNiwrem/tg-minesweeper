@@ -75,7 +75,9 @@ callbacks.callbackQuery(ACTION_RE, async (ctx) => {
 
   // Staleness guard 1: nonce mismatch ⇒ tap on an older/replaced game.
   if (!stored || stored.nonce !== action.nonce) {
-    return ctx.answerCallbackQuery({ text: "That game is over — /new to play" });
+    return ctx.answerCallbackQuery({
+      text: "That game is over — /new to play",
+    });
   }
   // Staleness guard 2: same game but a superseded board copy (repost case).
   if (ctx.msg?.message_id !== stored.messageId) {
@@ -99,7 +101,9 @@ callbacks.callbackQuery(ACTION_RE, async (ctx) => {
   // Explicit repost: move the live board to the newest message.
   if (action.kind === "repost") {
     if (isOver(g)) {
-      return ctx.answerCallbackQuery({ text: "That game is over — /new to play" });
+      return ctx.answerCallbackQuery({
+        text: "That game is over — /new to play",
+      });
     }
     await repostBoard(ctx, stored, g, s.stats);
     return ctx.answerCallbackQuery();
@@ -122,7 +126,9 @@ callbacks.callbackQuery(ACTION_RE, async (ctx) => {
     if (isOver(g)) {
       toast = "That game is over — /new to play";
     } else if (g.mode === "flag") {
-      if (toggleFlag(g, action.r, action.c) === "noop") toast = "Can't flag that";
+      if (toggleFlag(g, action.r, action.c) === "noop") {
+        toast = "Can't flag that";
+      }
     } else if (g.board[action.r]?.[action.c]?.flagged) {
       toast = "Unflag it first"; // misclick protection
     } else {

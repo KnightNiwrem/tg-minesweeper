@@ -23,7 +23,10 @@ Deno.serve(async (req: Request) => {
       return new Response("internal error", { status: 500 });
     }
   }
-  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/healthz")) {
+  if (
+    req.method === "GET" &&
+    (url.pathname === "/" || url.pathname === "/healthz")
+  ) {
     return new Response("minesweeper bot: ok");
   }
   return new Response("not found", { status: 404 });
