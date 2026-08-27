@@ -4,8 +4,8 @@ import type { ChatStats, MyContext } from "../context.ts";
 import { createGame, dig, isOver, resign, toggleFlag } from "../game/engine.ts";
 import { dehydrate, hydrate } from "../game/store.ts";
 import type { Difficulty, GameState } from "../game/types.ts";
-import { renderGame } from "../render/board.ts";
-import { freezeOldBoard } from "./freeze.ts";
+import { renderDifficultyPicker, renderGame } from "../render/board.ts";
+import { repostBoard } from "./freeze.ts";
 
 export const callbacks = new Composer<MyContext>();
 
@@ -21,7 +21,11 @@ function updateStats(stats: ChatStats, g: GameState, now: number): void {
       const best = stats.bestMs[g.difficulty];
       if (best === undefined || ms < best) stats.bestMs[g.difficulty] = ms;
     }
-  } else if (g.phase === "lost" || g.phase === "quit") {
+  } else if (g.phase === "lost") {
+    stats.losses++;
+  } else if (g.phase === "quit" && g.minesPlaced) {
+    // Giving up an untouched board (no dig yet) is not a loss — it is the
+    // only way to back out of a mis-picked difficulty.
     stats.losses++;
   }
 }
@@ -41,9 +45,17 @@ async function redraw(ctx: MyContext, g: GameState, stats: ChatStats) {
 }
 
 // Difficulty picker (nonce-free — must work when no game exists yet).
-// Morphs the picker message into the board.
+// This is the ONLY place games are created: it morphs the picker message into
+// the board. Reached from /start, /new (idle), and "Play again" (which turns
+// a finished board back into a picker in place).
 callbacks.callbackQuery(DIFF_RE, async (ctx) => {
   const s = await ctx.session;
+  // A stale picker (e.g. an old /start message) must not hijack a live game.
+  if (s.game && (s.game.phase === "playing" || s.game.phase === "fresh")) {
+    return ctx.answerCallbackQuery({
+      text: "A game is already live — finish it or give up first",
+    });
+  }
   const g = createGame(
     ctx.match[1] as Difficulty,
     ctx.from.id,
@@ -74,14 +86,22 @@ callbacks.callbackQuery(ACTION_RE, async (ctx) => {
 
   const g = hydrate(stored);
 
-  // "New game" replaces the current one: fresh nonce, fresh message.
+  // "Play again" on a finished board: reuse the message — edit it back into
+  // the difficulty picker; picking a difficulty then edits it into the board.
   if (action.kind === "new") {
-    const fresh = createGame(g.difficulty, ctx.from.id, playerName(ctx));
-    const sent = await ctx.replyWithRichMessage(renderGame(fresh, s.stats));
-    fresh.messageId = sent.message_id;
-    s.game = dehydrate(fresh);
-    if (!isOver(g)) g.phase = "quit"; // freeze the old live board as ended (not counted as a loss)
-    freezeOldBoard(ctx, stored.messageId, g, s.stats);
+    if (!isOver(g)) {
+      return ctx.answerCallbackQuery({ text: "Game is still live" });
+    }
+    await ctx.editMessageText(renderDifficultyPicker());
+    return ctx.answerCallbackQuery();
+  }
+
+  // Explicit repost: move the live board to the newest message.
+  if (action.kind === "repost") {
+    if (isOver(g)) {
+      return ctx.answerCallbackQuery({ text: "That game is over — /new to play" });
+    }
+    await repostBoard(ctx, stored, g, s.stats);
     return ctx.answerCallbackQuery();
   }
 

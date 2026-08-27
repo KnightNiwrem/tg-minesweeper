@@ -22,6 +22,14 @@ deployed on **Deno Deploy v2** — not long polling
 >    which has been shut down — in production every session access died with
 >    `SyntaxError: Unexpected non-whitespace character after JSON at position 3`
 >    (the adapter JSON.parses what is now an error page from `/api/login`).
+> 5. **Message economy + one creation path** (owner UX steering): games reuse their message —
+>    the difficulty picker edits itself into the board, and "Play again" edits a finished
+>    board back into the picker. Never post a new message automatically; a new message is
+>    posted only on explicit user action (/start-/new when idle, /new mid-game, or the
+>    ⬇️ Repost button). The picker is the ONLY place games are created — there is no
+>    "new game with same difficulty" shortcut, so difficulty is re-choosable every game.
+>    Mid-game abandonment goes through 🏳️ Give up alone (no live "New" button); a give-up
+>    before the first dig costs no loss.
 
 ---
 
@@ -276,8 +284,8 @@ Optional polish (build last): chording — render revealed digits as `style: "li
 2. `table` — the board (`is_compact: true`)
 3. `blockquote` — only when finished: **🏆 You win! 🎉** / **💥 Boom — you hit a mine.** / **🏳️ Game over — you gave up.**
 4. `buttons` — controls:
-   - live: `[⛏️ Digging|🚩 Flagging] [🔄 New] [🏳️ Give up (danger)]`
-   - finished: `[🔄 Play again (primary)]`
+   - live: `[⛏️ Digging|🚩 Flagging] [⬇️ Repost] [🏳️ Give up (danger)]`
+   - finished: `[🔄 Play again (primary)]` — edits the message into the difficulty picker
 5. `expandable_blockquote` — how-to-play + per-chat stats (wins/losses/best times)
 
 A **frozen** copy (superseded board, see §2.5) renders all cells as disabled buttons and
@@ -290,17 +298,26 @@ State lives in the grammY **session** (default key = chat id) as `game: StoredGa
 Lifecycle:
 
 ```
-game:null ──/new──▶ difficulty picker ──tap──▶ ACTIVE (exactly one live board message)
-ACTIVE ──win/boom/give-up──▶ FINISHED (frozen board + Play again; stats updated)
-ACTIVE ──/new──▶ board REPOSTED as fresh message (old copy frozen best-effort)
-FINISHED/ACTIVE ──new game──▶ replaced (old message frozen best-effort)
+game:null ──/start,/new──▶ difficulty picker (new message)
+picker ──difficulty tap──▶ ACTIVE (picker message EDITS into the board)
+ACTIVE ──win/boom/give-up──▶ FINISHED (same message: frozen board + Play again; stats updated)
+FINISHED ──Play again──▶ difficulty picker (same message EDITS back into the picker)
+ACTIVE ──/new or ⬇️ Repost──▶ board reposted as fresh message (old copy frozen best-effort)
 ```
 
-- `/new` with no active game → difficulty picker. `/new` mid-game → **repost** the current board (useful when buried in group chat); abandoning is only via explicit 🏳️ Give up (counts as a loss).
-- The 🔄 New **button** mid-game replaces the game (same difficulty, fresh nonce + fresh
-  message) **without** counting a loss; set the old game's phase to `"quit"` *only for the
-  frozen rendering* so the old copy draws as ended.
+One message carries the whole loop (picker → board → finished → picker → …); new messages
+appear only on explicit user actions.
+
+- `/new` with no active game → difficulty picker. `/new` mid-game and the ⬇️ Repost button →
+  **repost** the current board (useful when buried in group chat); abandoning is only via
+  explicit 🏳️ Give up. A give-up **before the first dig** records no loss (`quit` counts a
+  loss only when `minesPlaced`) — that's the escape hatch for a mis-picked difficulty.
+- There is **no live "New" button**: it would be give-up-without-the-loss, making stats
+  meaningless and Give up dead weight (this shipped at first and got steered out).
 - **Finished game stays in session** (not nulled) so the frozen board's "Play again" nonce still resolves; it's replaced when the next game starts.
+- The picker handler **refuses while a game is live** ("A game is already live…") so stale
+  pickers (old /start messages, boards already turned back into pickers) can't hijack a
+  running game. When no live game exists, any picker works — equivalent to Play again.
 - **Groups are co-op:** any member can tap (the game belongs to the chat; owner-locking would let an AFK user squat the chat's only slot). Mode toggle is shared board-wide state — acceptable, like a physical shared board. `startedBy`/`startedByName` kept for display/stats.
 
 ### 2.5 Staleness guards (both required, both cheap)
@@ -314,11 +331,12 @@ FINISHED/ACTIVE ──new game──▶ replaced (old message frozen best-effort
 |---|---|
 | `ms:<nonce>:c:<r>:<c>` | act on cell (dig or flag per current mode) |
 | `ms:<nonce>:m` | toggle dig/flag mode |
-| `ms:<nonce>:n` | new game, same difficulty |
-| `ms:<nonce>:q` | give up → reveal board, record loss |
-| `ms:diff:<easy\|medium\|hard>` | difficulty picker (pre-game, nonce-free — must work when `game` is null) |
+| `ms:<nonce>:n` | Play again (finished boards only): edit this message into the difficulty picker |
+| `ms:<nonce>:q` | give up → reveal board; records a loss only if the first dig happened |
+| `ms:<nonce>:r` | repost: move the live board to a fresh message, freeze this copy |
+| `ms:diff:<easy\|medium\|hard>` | difficulty picker (nonce-free — must work when `game` is null; refused while a game is live) |
 
-Router regexes: `/^ms:diff:(easy|medium|hard)$/` and `/^ms:(\w{4}):([cmnq])(?::(\d+):(\d+))?$/`.
+Router regexes: `/^ms:diff:(easy|medium|hard)$/` and `/^ms:(\w{4}):([cmnqr])(?::(\d+):(\d+))?$/`.
 
 Parse into a **discriminated union with one literal `kind` per member**:
 
@@ -361,8 +379,8 @@ tg-minesweeper/
 │  └─ handlers/
 │     ├─ commands.ts     # /start /new /help
 │     ├─ callbacks.ts    # the two callbackQuery routers + applyAction logic
-│     └─ freeze.ts       # freezeOldBoard() — separate file so commands.ts and
-│                        #   callbacks.ts can share it without a circular import
+│     └─ freeze.ts       # freezeOldBoard() + repostBoard() — separate file so commands.ts
+│                        #   and callbacks.ts can share them without a circular import
 └─ tests/
    ├─ helpers.ts         # seededRng (mulberry32), setMines(board fixture)
    ├─ engine_test.ts
@@ -539,19 +557,21 @@ function boardTable(g: GameState, frozen: boolean): InputRichBlock {
 commands.command(["start", "new"], async (ctx) => {
   const s = await ctx.session;
   if (s.game && (s.game.phase === "playing" || s.game.phase === "fresh")) {
-    const g = hydrate(s.game);
-    const old = s.game.messageId;
-    const sent = await ctx.replyWithRichMessage(renderGame(g, s.stats));
-    s.game.messageId = sent.message_id;                 // new copy is authoritative
-    freezeOldBoard(ctx, old, g, s.stats);               // best-effort, .catch(() => {}) inside
+    await repostBoard(ctx, s.game, hydrate(s.game), s.stats);  // shared with the ⬇️ button
     return;
   }
   await ctx.replyWithRichMessage(renderDifficultyPicker());
 });
+// repostBoard (freeze.ts): replyWithRichMessage(board) → stored.messageId = sent.message_id
+//                          → freezeOldBoard(old copy, best-effort .catch(() => {}))
 
-// callbacks.ts — difficulty picker (nonce-free; morphs picker message into the board)
+// callbacks.ts — difficulty picker (nonce-free; morphs picker message into the board).
+// The ONLY place games are created.
 callbacks.callbackQuery(DIFF_RE, async (ctx) => {
   const s = await ctx.session;
+  if (s.game && (s.game.phase === "playing" || s.game.phase === "fresh")) {
+    return ctx.answerCallbackQuery({ text: "A game is already live — finish it or give up first" });
+  }
   const g = createGame(ctx.match[1] as Difficulty, ctx.from.id, ctx.from.first_name);
   g.messageId = ctx.msg?.message_id ?? 0;
   await ctx.editMessageText(renderGame(g, s.stats));   // object ⇒ rich_message
@@ -571,14 +591,18 @@ callbacks.callbackQuery(ACTION_RE, async (ctx) => {
 
   const g = hydrate(stored);
 
-  // "new" needs ctx (sends a message) — handle before the pure dispatch:
+  // "Play again": reuse the message — edit it back into the difficulty picker
+  // (the picker tap then edits it into the next board; session untouched here).
   if (action.kind === "new") {
-    const fresh = createGame(g.difficulty, ctx.from.id, ctx.from.first_name);
-    const sent = await ctx.replyWithRichMessage(renderGame(fresh, s.stats));
-    fresh.messageId = sent.message_id;
-    s.game = dehydrate(fresh);
-    if (!isOver(g)) g.phase = "quit";       // frozen render shows "ended"; NOT counted as a loss
-    freezeOldBoard(ctx, stored.messageId, g, s.stats);
+    if (!isOver(g)) return ctx.answerCallbackQuery({ text: "Game is still live" });
+    await ctx.editMessageText(renderDifficultyPicker());
+    return ctx.answerCallbackQuery();
+  }
+
+  // Explicit repost: move the live board to the newest message.
+  if (action.kind === "repost") {
+    if (isOver(g)) return ctx.answerCallbackQuery({ text: "That game is over — /new to play" });
+    await repostBoard(ctx, stored, g, s.stats);
     return ctx.answerCallbackQuery();
   }
 
@@ -599,7 +623,7 @@ callbacks.callbackQuery(ACTION_RE, async (ctx) => {
 - `c` in Dig mode: digging a flag ⇒ noop + "Unflag it first"; boom ⇒ "💥 Boom!"; win ⇒ "🏆 You win!". (First-dig mine placement lives inside `dig()`.)
 - `c` in Flag mode: `toggleFlag` (revealed cells noop).
 - `m`: toggle mode, toast the new mode.
-- `q`: `resign(g)`.
+- `q`: `resign(g)`; `updateStats` counts a quit as a loss **only when `minesPlaced`**.
 - Guard every branch with `isOver(g)` — a finished game's only live control is Play again, but taps can still race in.
 
 ---

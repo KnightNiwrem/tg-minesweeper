@@ -6,6 +6,7 @@ import {
   cbMode,
   cbNew,
   cbQuit,
+  cbRepost,
   DIFF_RE,
   parseAction,
 } from "../src/codec.ts";
@@ -18,12 +19,13 @@ Deno.test("cell payload round-trips through the action regex", () => {
   assertEquals(parseAction(m), { kind: "cell", nonce: "ab12", r: 11, c: 7 });
 });
 
-Deno.test("mode/new/quit payloads round-trip", () => {
+Deno.test("mode/new/quit/repost payloads round-trip", () => {
   for (
     const [data, kind] of [
       [cbMode("zz9a"), "mode"],
       [cbNew("zz9a"), "new"],
       [cbQuit("zz9a"), "quit"],
+      [cbRepost("zz9a"), "repost"],
     ] as const
   ) {
     const m = data.match(ACTION_RE);
@@ -50,6 +52,7 @@ Deno.test("every payload is at most 64 bytes", () => {
     cbMode("zzzz"),
     cbNew("zzzz"),
     cbQuit("zzzz"),
+    cbRepost("zzzz"),
     cbDiff("medium"),
   ];
   for (const p of payloads) {

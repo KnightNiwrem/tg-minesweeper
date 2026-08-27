@@ -1,12 +1,8 @@
 import { Composer } from "grammy";
 import type { MyContext } from "../context.ts";
 import { hydrate } from "../game/store.ts";
-import {
-  renderDifficultyPicker,
-  renderGame,
-  renderHelp,
-} from "../render/board.ts";
-import { freezeOldBoard } from "./freeze.ts";
+import { renderDifficultyPicker, renderHelp } from "../render/board.ts";
+import { repostBoard } from "./freeze.ts";
 
 export const commands = new Composer<MyContext>();
 
@@ -17,11 +13,7 @@ export const commands = new Composer<MyContext>();
 commands.command(["start", "new"], async (ctx) => {
   const s = await ctx.session;
   if (s.game && (s.game.phase === "playing" || s.game.phase === "fresh")) {
-    const g = hydrate(s.game);
-    const oldMessageId = s.game.messageId;
-    const sent = await ctx.replyWithRichMessage(renderGame(g, s.stats));
-    s.game.messageId = sent.message_id; // the new copy is authoritative
-    freezeOldBoard(ctx, oldMessageId, g, s.stats);
+    await repostBoard(ctx, s.game, hydrate(s.game), s.stats);
     return;
   }
   await ctx.replyWithRichMessage(renderDifficultyPicker());

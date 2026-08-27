@@ -85,11 +85,13 @@ Deno.test("mid-game board: structure, limits, and cell states", () => {
   assertEquals(flaggedCell.button.text, "🚩");
   assert("callback_data" in flaggedCell.button);
 
-  // Live controls: mode toggle + New + Give up
+  // Live controls: mode toggle + Repost + Give up (no "New" while live)
   const controls = msg.blocks?.find((b) => b.type === "buttons");
   assert(controls !== undefined && controls.type === "buttons");
-  assertEquals(controls.buttons.length, 3);
-  assert("callback_data" in controls.buttons[0]);
+  const suffixes = controls.buttons.map((b) =>
+    "callback_data" in b ? b.callback_data.slice(-2) : "??"
+  );
+  assertEquals(suffixes, [":m", ":r", ":q"]);
 
   // Status line shows counts, elapsed time, and the starter's name
   const status = msg.blocks?.[0];
@@ -120,11 +122,13 @@ Deno.test("lost board: mines shown, remaining cells disabled, single control", (
   for (const b of collectButtons(msg)) {
     if (b.text === "⬜") assert("disabled" in b);
   }
-  // Banner + single "Play again" control
+  // Banner + single "Play again" control (leads back to the difficulty picker)
   assert(msg.blocks?.some((b) => b.type === "blockquote"));
   const controls = msg.blocks?.find((b) => b.type === "buttons");
   assert(controls !== undefined && controls.type === "buttons");
   assertEquals(controls.buttons.length, 1);
+  assert("callback_data" in controls.buttons[0]);
+  assert(controls.buttons[0].callback_data.endsWith(":n"));
 });
 
 Deno.test("won board renders the win banner", () => {

@@ -8,7 +8,7 @@ import type {
   RichMessageButton,
   RichText,
 } from "grammy/types";
-import { cbCell, cbMode, cbNew, cbQuit } from "../codec.ts";
+import { cbCell, cbMode, cbNew, cbQuit, cbRepost } from "../codec.ts";
 import { isOver } from "../game/engine.ts";
 import { DIFFICULTIES, type GameState } from "../game/types.ts";
 import type { ChatStats } from "../context.ts";
@@ -71,6 +71,7 @@ function boardTable(g: GameState, frozen: boolean): InputRichBlock {
 
 function controls(g: GameState): InputRichBlock {
   if (isOver(g)) {
+    // "Play again" morphs this message back into the difficulty picker.
     return buttonsRow([
       cbBtn("🔄 Play again", cbNew(g.nonce), "primary"),
     ]);
@@ -79,7 +80,7 @@ function controls(g: GameState): InputRichBlock {
     g.mode === "dig"
       ? cbBtn("⛏️ Digging", cbMode(g.nonce), "primary")
       : cbBtn("🚩 Flagging", cbMode(g.nonce), "success"),
-    cbBtn("🔄 New", cbNew(g.nonce)),
+    cbBtn("⬇️ Repost", cbRepost(g.nonce)),
     cbBtn("🏳️ Give up", cbQuit(g.nonce), "danger"),
   ]);
 }
@@ -88,6 +89,7 @@ function helpAndStats(stats: ChatStats): RichText {
   const lines = [
     "How to play: tap ⬜ to dig. Toggle to 🚩 Flagging to mark mines.",
     "First dig is always safe. Reveal every safe cell to win.",
+    "⬇️ Repost moves the board down to the newest message.",
     "Anyone in this chat can play — it's a shared board.",
     "",
     `This chat: 🏆 ${stats.wins} won · 💥 ${stats.losses} lost`,
