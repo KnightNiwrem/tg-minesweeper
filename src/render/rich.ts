@@ -31,10 +31,6 @@ export function cbBtn(
     : { text, callback_data, style };
 }
 
-export function disabledBtn(text: string): RichMessageButton {
-  return { text, disabled: {} };
-}
-
 export function banner(text: string): InputRichBlock {
   return {
     type: "blockquote",
