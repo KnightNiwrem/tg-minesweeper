@@ -328,23 +328,39 @@ during testing, shrink Hard to 10×12 — the architecture doesn't change.
   (default `Math.random`) and `dig` takes an optional `now` — deterministic
   tests need both.
 
-### 2.2 Cell rendering states
+### 2.2 Cell rendering states **[revised after real-device feedback]**
 
-| State                               | Rendering                                                                                                   |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Covered, game live                  | callback button `⬜`, data `ms:<nonce>:c:<r>:<c>`                                                           |
-| Flagged, game live                  | callback button `🚩` (same data; engine interprets by mode)                                                 |
-| Revealed, n > 0                     | plain **bold** digit (`{ type: "bold", text: "3" }`)                                                        |
-| Revealed, n = 0                     | `" "` (single space)                                                                                        |
-| Game over, covered/flagged non-mine | **`disabled` button** (keeps grid geometry stable)                                                          |
-| Game over, mine                     | `💥` if it was the fatal cell, else `💣` (plain text); a **flagged** mine keeps its 🚩 as a disabled button |
+**EVERY cell is a `style: "link"` button** (borderless) **with a single-emoji
+label** — tappable (`callback_data`) only when covered and live, `disabled: {}`
+otherwise:
+
+| State                                      | Label                                                                                  |
+| ------------------------------------------ | -------------------------------------------------------------------------------------- |
+| Covered, game live                         | `⬜` (callback, data `ms:<nonce>:c:<r>:<c>`)                                           |
+| Flagged, game live                         | `🚩` (callback, same data; engine interprets by mode)                                  |
+| Revealed, n > 0                            | keycap emoji `1️⃣`–`8️⃣` (disabled)                                                      |
+| Revealed, n = 0                            | `▫️` (disabled)                                                                        |
+| Game over/frozen, covered/flagged non-mine | `⬜`/`🚩` (disabled)                                                                   |
+| Game over, mine                            | `💥` if it was the fatal cell, else `💣` (disabled); a **flagged** mine keeps its `🚩` |
+
+Why this shape (both halves bit on a real phone):
+
+- **Default-style buttons draw a subtle pill border** around every
+  covered/flagged cell — visually noisy on a 100+ cell grid. `style: "link"`
+  removes it.
+- **Mixing buttons and plain text made columns wobble**: bold digits and the
+  `" "` zero cell are narrower than emoji buttons, so column widths shifted as
+  cells were revealed. All-button
+  - all-single-emoji makes every cell state geometrically identical, so the grid
+    never resizes during play. (Keycap digits `1️⃣` replace bold text digits for
+    the same reason.)
 
 Misclick protection: digging a flagged cell in Dig mode is a no-op with toast
 "Unflag it first".
 
-Optional polish (build last): chording — render revealed digits as
-`style: "link"` callback buttons (borderless, looks like text); tapping when
-adjacent flags == digit reveals remaining neighbors.
+Optional polish (build last): chording — swap a revealed digit's `disabled: {}`
+for `callback_data` (it is already a link-style button); tapping when adjacent
+flags == digit reveals remaining neighbors.
 
 ### 2.3 Message layout (top to bottom)
 
@@ -658,6 +674,26 @@ import type {
 //   renderGame(g, stats, opts?: { frozen?: boolean; now?: number })
 // `frozen`: all-disabled rendering for superseded copies; `now`: clock injection for tests.
 
+const DIGIT_LABELS = [
+  "▫️",
+  "1️⃣",
+  "2️⃣",
+  "3️⃣",
+  "4️⃣",
+  "5️⃣",
+  "6️⃣",
+  "7️⃣",
+  "8️⃣",
+] as const;
+
+// Every cell: link-style button, single-emoji label (§2.2)
+function cellButton(label: string, data: string | null): RichText {
+  const button: RichMessageButton = data === null
+    ? { text: label, style: "link", disabled: {} }
+    : { text: label, style: "link", callback_data: data };
+  return { type: "button", button };
+}
+
 function cellContent(
   g: GameState,
   r: number,
@@ -666,17 +702,12 @@ function cellContent(
 ): RichText {
   const cell = g.board[r][c];
   const over = isOver(g);
-  if (over && cell.mine && !cell.flagged) return cell.exploded ? "💥" : "💣";
-  if (cell.revealed) {
-    return cell.adjacent === 0
-      ? " "
-      : { type: "bold", text: String(cell.adjacent) };
+  if (over && cell.mine && !cell.flagged) {
+    return cellButton(cell.exploded ? "💥" : "💣", null);
   }
+  if (cell.revealed) return cellButton(DIGIT_LABELS[cell.adjacent], null);
   const label = cell.flagged ? "🚩" : "⬜";
-  const button: RichMessageButton = over || frozen
-    ? { text: label, disabled: {} }
-    : { text: label, callback_data: cbCell(g.nonce, r, c) };
-  return { type: "button", button };
+  return cellButton(label, over || frozen ? null : cbCell(g.nonce, r, c));
 }
 
 function boardTable(g: GameState, frozen: boolean): InputRichBlock {
@@ -808,8 +839,11 @@ callbacks.callbackQuery(ACTION_RE, async (ctx) => {
    both, always.
 2. Button `text` = plain text + emoji only. No `{ type: "bold" }` inside button
    labels.
-3. `style: "link"` only on callback buttons (matters only for the chording
-   extra).
+3. The type docs say `style: "link"` is allowed only on callback buttons, but
+   the server also accepts it on **`disabled`** buttons — verified from the
+   message JSON of a production chess bot's ended game (all pieces
+   `style:"link", disabled:{}`). The whole board relies on this for
+   revealed/frozen cells.
 4. Buttons block max **8** buttons; table max **20** columns; table rows count
    toward the **500-block** cap.
 5. **Always** `answerCallbackQuery`, even on no-ops — otherwise the client
@@ -820,8 +854,10 @@ callbacks.callbackQuery(ACTION_RE, async (ctx) => {
    type makes forgetting it a compile error.
 8. One re-render per action (flood fill = still one edit), renderer is a pure
    function of state.
-9. Uniform-width glyphs for tappable states (`⬜`/`🚩` both emoji-width) so
-   columns don't wobble.
+9. ✅ Uniform cell geometry: every cell in every state is a link-style button
+   with a single-emoji label (§2.2). The first version mixed emoji buttons with
+   bold-digit / space plain text — columns visibly resized as cells were
+   revealed on a real phone.
 10. `sendRichMessageDraft` is irrelevant here (ephemeral 30-s AI-streaming
     preview, private chats only) — do not use.
 11. Do not store per-user data in the session — it is per-chat by design.

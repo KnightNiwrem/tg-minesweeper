@@ -114,8 +114,14 @@ Deno.test("lost board: mines shown, remaining cells disabled, single control", (
   assertLimits(msg);
 
   const table = tableOf(msg);
-  // Fatal mine renders as plain 💥 text
-  assertEquals(table.cells[2][2].text, "💥");
+  // Fatal mine renders as a disabled 💥 button
+  const fatal = table.cells[2][2].text;
+  assert(
+    typeof fatal === "object" && !Array.isArray(fatal) &&
+      fatal.type === "button",
+  );
+  assertEquals(fatal.button.text, "💥");
+  assert("disabled" in fatal.button);
   // Flagged mine keeps its flag (as a disabled button)
   const flagged = table.cells[5][5].text;
   assert(
@@ -167,6 +173,79 @@ Deno.test("hard board respects the 20-column cap with all 144 cells tappable", (
   assertEquals(table.cells[0].length, 12);
   const live = collectButtons(msg).filter((b) => "callback_data" in b);
   assert(live.length >= 144, "all cells plus controls should be tappable");
+});
+
+Deno.test("every cell is a borderless link button with a single-emoji label", () => {
+  const allowed = new Set([
+    "⬜",
+    "🚩",
+    "💣",
+    "💥",
+    "▫️",
+    "1️⃣",
+    "2️⃣",
+    "3️⃣",
+    "4️⃣",
+    "5️⃣",
+    "6️⃣",
+    "7️⃣",
+    "8️⃣",
+  ]);
+  const checkCells = (msg: InputRichMessage, label: string) => {
+    for (const row of tableOf(msg).cells) {
+      for (const cell of row) {
+        const t = cell.text;
+        assert(
+          typeof t === "object" && !Array.isArray(t) && t.type === "button",
+          `${label}: cell is not a button`,
+        );
+        assertEquals(
+          t.button.style,
+          "link",
+          `${label}: cell button not link-style`,
+        );
+        assert(
+          typeof t.button.text === "string" && allowed.has(t.button.text),
+          `${label}: unexpected cell label ${JSON.stringify(t.button.text)}`,
+        );
+      }
+    }
+  };
+
+  // Mid-game: covered, flagged, digits, and cleared cells all present.
+  // Flag a SAFE cell so the flood skips it and the game stays live (with only
+  // corner mines, an unimpeded flood would reveal everything and win).
+  const g = createGame("easy", 1, "Uni", seededRng(8));
+  setMines(g, [[0, 7], [7, 0]]);
+  toggleFlag(g, 3, 3);
+  dig(g, 7, 7);
+  assertEquals(g.phase, "playing");
+  checkCells(renderGame(g, stats), "live");
+  // Revealed cells are disabled (not tappable), covered cells are tappable
+  const table = tableOf(renderGame(g, stats));
+  for (const row of table.cells) {
+    for (const cell of row) {
+      const t = cell.text;
+      if (typeof t !== "object" || Array.isArray(t) || t.type !== "button") {
+        continue;
+      }
+      if (t.button.text === "⬜" || t.button.text === "🚩") {
+        assert(
+          "callback_data" in t.button,
+          "covered/flagged cell must be tappable",
+        );
+      } else {
+        assert("disabled" in t.button, "revealed cell must be disabled");
+      }
+    }
+  }
+
+  // Lost game: mines shown, everything a link button still
+  const lost = createGame("easy", 1, "Uni", seededRng(9));
+  setMines(lost, [[3, 3], [0, 0]]);
+  dig(lost, 3, 3);
+  assertEquals(lost.phase, "lost");
+  checkCells(renderGame(lost, stats), "lost");
 });
 
 Deno.test("difficulty picker structure", () => {
