@@ -104,7 +104,7 @@ Deno.test("mid-game board: structure, limits, and cell states", () => {
   assert(msg.blocks?.some((b) => b.type === "expandable_blockquote"));
 });
 
-Deno.test("lost board: mines shown, remaining cells disabled, single control", () => {
+Deno.test("lost board: mines shown, cells inert plain text, single control", () => {
   const g = createGame("easy", 1, "Bob", seededRng(4));
   setMines(g, [[2, 2], [5, 5]]);
   toggleFlag(g, 5, 5);
@@ -114,24 +114,14 @@ Deno.test("lost board: mines shown, remaining cells disabled, single control", (
   assertLimits(msg);
 
   const table = tableOf(msg);
-  // Fatal mine renders as a disabled 💥 button
-  const fatal = table.cells[2][2].text;
-  assert(
-    typeof fatal === "object" && !Array.isArray(fatal) &&
-      fatal.type === "button",
-  );
-  assertEquals(fatal.button.text, "💥");
-  assert("disabled" in fatal.button);
-  // Flagged mine keeps its flag (as a disabled button)
-  const flagged = table.cells[5][5].text;
-  assert(
-    typeof flagged === "object" && !Array.isArray(flagged) &&
-      flagged.type === "button",
-  );
-  assert("disabled" in flagged.button);
-  // Every remaining covered cell is a disabled button — geometry stays stable
-  for (const b of collectButtons(msg)) {
-    if (b.text === "⬜") assert("disabled" in b);
+  // Unclickable cells are plain text — no button, so no grey pill:
+  // fatal mine, flagged mine (keeps its flag), and remaining covered cells.
+  assertEquals(table.cells[2][2].text, "💥");
+  assertEquals(table.cells[5][5].text, "🚩");
+  for (const row of table.cells) {
+    for (const cell of row) {
+      assert(typeof cell.text === "string", "game-over cells must be text");
+    }
   }
   // Banner + single "Play again" control (leads back to the difficulty picker)
   assert(msg.blocks?.some((b) => b.type === "blockquote"));
@@ -151,15 +141,13 @@ Deno.test("won board renders the win banner", () => {
   assert(msg.blocks?.some((b) => b.type === "blockquote"));
 });
 
-Deno.test("frozen board has no live buttons at all", () => {
+Deno.test("frozen board has no buttons at all", () => {
   const g = createGame("medium", 1, "Di", seededRng(6));
   setMines(g, [[0, 0]]);
   dig(g, 9, 9);
   const msg = renderGame(g, stats, { frozen: true });
   assertLimits(msg);
-  for (const b of collectButtons(msg)) {
-    assert("disabled" in b, "frozen board must contain only disabled buttons");
-  }
+  assertEquals(collectButtons(msg).length, 0);
   assertFalse(msg.blocks?.some((b) => b.type === "buttons") ?? false);
 });
 
@@ -175,13 +163,14 @@ Deno.test("hard board respects the 20-column cap with all 144 cells tappable", (
   assert(live.length >= 144, "all cells plus controls should be tappable");
 });
 
-Deno.test("every cell is a borderless link button with a single-emoji label", () => {
-  const allowed = new Set([
-    "⬜",
-    "🚩",
+Deno.test("cells: tappable = borderless link buttons, unclickable = plain emoji text", () => {
+  // Buttons only for tappable states; everything else is plain text so the
+  // client never draws its grey disabled-button pill. All labels are single
+  // emoji, so button and text cells share the same width.
+  const textLabels = new Set([
     "💣",
     "💥",
-    "▫️",
+    "*️⃣",
     "1️⃣",
     "2️⃣",
     "3️⃣",
@@ -190,23 +179,34 @@ Deno.test("every cell is a borderless link button with a single-emoji label", ()
     "6️⃣",
     "7️⃣",
     "8️⃣",
+    // covered/flagged appear as text only on finished/frozen boards
+    "⬜",
+    "🚩",
   ]);
-  const checkCells = (msg: InputRichMessage, label: string) => {
+  const checkCells = (msg: InputRichMessage, live: boolean, label: string) => {
     for (const row of tableOf(msg).cells) {
       for (const cell of row) {
         const t = cell.text;
+        if (typeof t === "string") {
+          assert(
+            textLabels.has(t),
+            `${label}: unexpected text label ${JSON.stringify(t)}`,
+          );
+          continue;
+        }
         assert(
-          typeof t === "object" && !Array.isArray(t) && t.type === "button",
-          `${label}: cell is not a button`,
+          live &&
+            typeof t === "object" && !Array.isArray(t) && t.type === "button",
+          `${label}: only live boards may contain cell buttons`,
         );
-        assertEquals(
-          t.button.style,
-          "link",
-          `${label}: cell button not link-style`,
+        assertEquals(t.button.style, "link", `${label}: cell button not link`);
+        assert(
+          "callback_data" in t.button,
+          `${label}: cell button not tappable`,
         );
         assert(
-          typeof t.button.text === "string" && allowed.has(t.button.text),
-          `${label}: unexpected cell label ${JSON.stringify(t.button.text)}`,
+          t.button.text === "⬜" || t.button.text === "🚩",
+          `${label}: only covered/flagged cells are buttons`,
         );
       }
     }
@@ -220,32 +220,20 @@ Deno.test("every cell is a borderless link button with a single-emoji label", ()
   toggleFlag(g, 3, 3);
   dig(g, 7, 7);
   assertEquals(g.phase, "playing");
-  checkCells(renderGame(g, stats), "live");
-  // Revealed cells are disabled (not tappable), covered cells are tappable
-  const table = tableOf(renderGame(g, stats));
-  for (const row of table.cells) {
-    for (const cell of row) {
-      const t = cell.text;
-      if (typeof t !== "object" || Array.isArray(t) || t.type !== "button") {
-        continue;
-      }
-      if (t.button.text === "⬜" || t.button.text === "🚩") {
-        assert(
-          "callback_data" in t.button,
-          "covered/flagged cell must be tappable",
-        );
-      } else {
-        assert("disabled" in t.button, "revealed cell must be disabled");
-      }
-    }
-  }
+  const liveMsg = renderGame(g, stats);
+  checkCells(liveMsg, true, "live");
+  // The live board still has tappable cells (the flagged cell + covered mines)
+  const tappable = collectButtons(liveMsg).filter((b) => "callback_data" in b);
+  assert(tappable.length > 3, "live board must have tappable cells");
+  // Cleared cells render as the keycap asterisk
+  assertEquals(tableOf(liveMsg).cells[7][7].text, "*️⃣");
 
-  // Lost game: mines shown, everything a link button still
+  // Lost game: mines shown, every cell plain text
   const lost = createGame("easy", 1, "Uni", seededRng(9));
   setMines(lost, [[3, 3], [0, 0]]);
   dig(lost, 3, 3);
   assertEquals(lost.phase, "lost");
-  checkCells(renderGame(lost, stats), "lost");
+  checkCells(renderGame(lost, stats), false, "lost");
 });
 
 Deno.test("difficulty picker structure", () => {

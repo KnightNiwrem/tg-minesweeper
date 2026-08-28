@@ -39,9 +39,10 @@ function statusLine(g: GameState, now: number): RichText {
 }
 
 // Adjacent-mine counts as keycap emoji so every label is emoji-width;
-// index 0 is the cleared-cell marker.
+// index 0 (*️⃣, keycap asterisk) is the cleared-cell marker — same keycap
+// family as the digits.
 const DIGIT_LABELS = [
-  "▫️",
+  "*️⃣",
   "1️⃣",
   "2️⃣",
   "3️⃣",
@@ -52,18 +53,11 @@ const DIGIT_LABELS = [
   "8️⃣",
 ] as const;
 
-// EVERY cell is a style:"link" button (borderless) with a single-emoji label:
-// tappable (callback) while covered and live, disabled otherwise. Uniform
-// button geometry + uniform label width = columns never resize during play.
-// (style:"link" on disabled buttons is accepted by the server — verified from
-// the message JSON of a production chess bot's ended game.)
-function cellButton(label: string, data: string | null): RichText {
-  const button: RichMessageButton = data === null
-    ? { text: label, style: "link", disabled: {} }
-    : { text: label, style: "link", callback_data: data };
-  return { type: "button", button };
-}
-
+// Only TAPPABLE cells are buttons — style:"link" callback buttons render
+// borderless, but the client draws a grey pill around DISABLED buttons even
+// with style:"link" (seen on a real device), so every unclickable cell is
+// plain text instead. All labels are single emoji, so button and text cells
+// share the same width and columns never resize during play.
 function cellContent(
   g: GameState,
   r: number,
@@ -72,13 +66,16 @@ function cellContent(
 ): RichText {
   const cell = g.board[r][c];
   const over = isOver(g);
-  if (over && cell.mine && !cell.flagged) {
-    return cellButton(cell.exploded ? "💥" : "💣", null);
-  }
-  if (cell.revealed) return cellButton(DIGIT_LABELS[cell.adjacent], null);
+  if (over && cell.mine && !cell.flagged) return cell.exploded ? "💥" : "💣";
+  if (cell.revealed) return DIGIT_LABELS[cell.adjacent];
   const label = cell.flagged ? "🚩" : "⬜";
-  const tappable = !(over || frozen);
-  return cellButton(label, tappable ? cbCell(g.nonce, r, c) : null);
+  if (over || frozen) return label;
+  const button: RichMessageButton = {
+    text: label,
+    style: "link",
+    callback_data: cbCell(g.nonce, r, c),
+  };
+  return { type: "button", button };
 }
 
 function boardTable(g: GameState, frozen: boolean): InputRichBlock {
